@@ -131,7 +131,7 @@ func (g *Generator) approveERC20(token common.Address, spender common.Address) {
 		txs = append(txs, tx)
 	}
 
-	err = util.WaitForReceiptsOfTxs(client, txs, 20*time.Second)
+	err = util.WaitForReceiptsOfTxs(client, txs, 100*time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -170,7 +170,7 @@ func (g *Generator) prepareERC20(contractAddressStr string) {
 		txs = append(txs, tx)
 	}
 
-	err = util.WaitForReceiptsOfTxs(client, txs, 20*time.Second)
+	err = util.WaitForReceiptsOfTxs(client, txs, 100*time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -206,7 +206,7 @@ func (g *Generator) prepareSenders() {
 		txs = append(txs, signedTx)
 	}
 
-	err = util.WaitForReceiptsOfTxs(client, txs, 20*time.Second)
+	err = util.WaitForReceiptsOfTxs(client, txs, 100*time.Second)
 	if err != nil {
 		panic(err)
 	}

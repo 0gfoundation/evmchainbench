@@ -33,5 +33,7 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().StringP("http-rpc", "", "http://127.0.0.1:8545", "RPC HTTP Endpoint")
 	rootCmd.PersistentFlags().StringP("ws-rpc", "", "ws://127.0.0.1:8546", "RPC WS Endpoint")
+	rootCmd.PersistentFlags().StringP("rpc-file", "", "", "Path to a file that contains RPC HTTP endpoints, one per line starting from line 2")
+	rootCmd.PersistentFlags().StringP("cl-address", "", "", "CL address for validator")
 	rootCmd.PersistentFlags().IntP("mempool", "", 5000, "Mempool size")
 }

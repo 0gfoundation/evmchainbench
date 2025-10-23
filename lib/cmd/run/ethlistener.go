@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	limiterpkg "github.com/0glabs/evmchainbench/lib/limiter"
 	"github.com/gorilla/websocket"
@@ -20,19 +21,26 @@ type BlockInfo struct {
 
 type EthereumListener struct {
 	wsURL            string
+	clAddress        string // New field for CL address
 	conn             *websocket.Conn
+	tmConn           *websocket.Conn // New field for Tendermint WebSocket connection
 	limiter          *limiterpkg.RateLimiter
 	blockStat        []BlockInfo
 	quit             chan struct{}
 	bestTPS          int64
 	gasUsedAtBestTPS float64
+	selfblocks       map[int]bool // Track blocks proposed by CL validator
+	blockTxns        map[int]int  // Track transaction count for each block height
 }
 
-func NewEthereumListener(wsURL string, limiter *limiterpkg.RateLimiter) *EthereumListener {
+func NewEthereumListener(wsURL, clAddress string, limiter *limiterpkg.RateLimiter) *EthereumListener {
 	return &EthereumListener{
-		wsURL:   wsURL,
-		limiter: limiter,
-		quit:    make(chan struct{}),
+		wsURL:      wsURL,
+		clAddress:  clAddress,
+		limiter:    limiter,
+		quit:       make(chan struct{}),
+		selfblocks: make(map[int]bool),
+		blockTxns:  make(map[int]int),
 	}
 }
 
@@ -42,6 +50,16 @@ func (el *EthereumListener) Connect() error {
 		return fmt.Errorf("dial error: %v", err)
 	}
 	el.conn = conn
+	return nil
+}
+
+// ConnectTendermint connects to the Tendermint WebSocket endpoint
+func (el *EthereumListener) ConnectTendermint() error {
+	conn, _, err := websocket.DefaultDialer.Dial("ws://localhost:26657/websocket", http.Header{})
+	if err != nil {
+		return fmt.Errorf("tendermint dial error: %v", err)
+	}
+	el.tmConn = conn
 	return nil
 }
 
@@ -62,6 +80,92 @@ func (el *EthereumListener) SubscribeNewHeads() error {
 	return nil
 }
 
+// SubscribeTendermintNewBlock subscribes to Tendermint NewBlock events
+func (el *EthereumListener) SubscribeTendermintNewBlock() error {
+	subscribeMsg := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "subscribe",
+		"params":  []interface{}{"tm.event='NewBlock'"},
+		"id":      1,
+	}
+	err := el.tmConn.WriteJSON(subscribeMsg)
+	if err != nil {
+		return fmt.Errorf("tendermint subscribe error: %v", err)
+	}
+
+	go el.listenForTendermintMessages()
+
+	return nil
+}
+
+func (el *EthereumListener) listenForTendermintMessages() {
+	for {
+		_, message, err := el.tmConn.ReadMessage()
+		if err != nil {
+			log.Println("Tendermint WebSocket read error:", err)
+			return
+		}
+
+		var response map[string]interface{}
+		err = json.Unmarshal(message, &response)
+		if err != nil {
+			log.Println("Tendermint unmarshal error:", err)
+			continue
+		}
+
+		el.handleTendermintMessage(response)
+	}
+}
+
+func (el *EthereumListener) handleTendermintMessage(response map[string]interface{}) {
+	// Get current time with millisecond precision
+	currentTime := time.Now().Format("2006-01-02 15:04:05.000")
+
+	// Check if this is a NewBlock event
+	result, ok := response["result"]
+	if !ok {
+		return
+	}
+
+	if data, ok := result.(map[string]interface{})["data"]; ok {
+		if dataMap, ok := data.(map[string]interface{}); ok {
+			if value, ok := dataMap["value"]; ok {
+				if valueMap, ok := value.(map[string]interface{}); ok {
+					if block, ok := valueMap["block"]; ok {
+						if blockMap, ok := block.(map[string]interface{}); ok {
+							if header, ok := blockMap["header"]; ok {
+								if headerMap, ok := header.(map[string]interface{}); ok {
+									if height, ok := headerMap["height"]; ok {
+										fmt.Printf("[%s] Tendermint NewBlock - Height: %v\n", currentTime, height)
+
+										// Parse block height
+										heightInt, _ := strconv.ParseInt(height.(string), 10, 64)
+
+										// Check if proposer_address matches CL validator address
+										if proposerAddress, ok := headerMap["proposer_address"]; ok {
+											if proposerStr, ok := proposerAddress.(string); ok {
+												if proposerStr == el.clAddress {
+													// Check if this block height has transaction data and increase limit
+													if txCount, exists := el.blockTxns[int(heightInt)]; exists {
+														el.limiter.IncreaseLimit(txCount)
+													}
+													// Add block height to selfblocks set
+													el.selfblocks[int(heightInt)] = true
+													fmt.Printf("[%s] Self-proposed block detected - Height: %d\n", currentTime, heightInt)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func (el *EthereumListener) listenForMessages() {
 	for {
 		_, message, err := el.conn.ReadMessage()
@@ -78,6 +182,17 @@ func (el *EthereumListener) listenForMessages() {
 
 		if method, ok := response["method"]; ok && method == "eth_subscription" {
 			el.handleNewHead(response)
+		} else if id, ok := response["id"]; ok && id == float64(1) {
+			// Check if this is a txpool_status response
+			if result, ok := response["result"].(map[string]interface{}); ok {
+				if _, hasPending := result["pending"]; hasPending {
+					el.handleTxpoolStatus(response)
+				} else {
+					el.handleBlockResponse(response)
+				}
+			} else {
+				el.handleBlockResponse(response)
+			}
 		} else {
 			el.handleBlockResponse(response)
 		}
@@ -117,13 +232,44 @@ func (el *EthereumListener) handleNewHead(response map[string]interface{}) {
 	}
 }
 
+func (el *EthereumListener) handleTxpoolStatus(response map[string]interface{}) {
+	if result, ok := response["result"].(map[string]interface{}); ok {
+		pending, _ := strconv.ParseInt(result["pending"].(string), 10, 64)
+		queued, _ := strconv.ParseInt(result["queued"].(string), 10, 64)
+
+		// Get current time with millisecond precision
+		currentTime := time.Now().Format("2006-01-02 15:04:05.000")
+		fmt.Printf("[%s] Mempool Status - Pending: %d, Queued: %d\n", currentTime, pending, queued)
+	}
+}
+
 func (el *EthereumListener) handleBlockResponse(response map[string]interface{}) {
 	if result, ok := response["result"].(map[string]interface{}); ok {
 		if txns, ok := result["transactions"].([]interface{}); ok {
-			el.limiter.IncreaseLimit(len(txns))
-			ts, _ := strconv.ParseInt(result["timestamp"].(string)[2:], 16, 64)
+			systs := time.Now().Unix()
+			ts := systs
+			// fmt.Println("ts", ts, "systs", systs)
 			gasUsed, _ := strconv.ParseInt(result["gasUsed"].(string)[2:], 16, 64)
 			gasLimit, _ := strconv.ParseInt(result["gasLimit"].(string)[2:], 16, 64)
+
+			// Get current time with millisecond precision
+			currentTime := time.Now().Format("2006-01-02 15:04:05.000")
+			// Get block number
+			blockNumber := result["number"].(string)
+
+			// Record transaction count for this block height
+			blockHeight, _ := strconv.ParseInt(blockNumber[2:], 16, 64) // Remove "0x" prefix and parse as hex
+
+			// Only increase limit if this block is in selfblocks (proposed by CL validator)
+			if el.selfblocks[int(blockHeight)] {
+				el.limiter.IncreaseLimit(len(txns))
+			}
+
+			el.blockTxns[int(blockHeight)] = len(txns)
+
+			// Output current time, block number, and transaction count
+			fmt.Printf("[%s] Block: %s, Transactions: %d, GasUsed: %d, GasLimit: %d\n", currentTime, blockNumber, len(txns), gasUsed, gasLimit)
+
 			el.blockStat = append(el.blockStat, BlockInfo{
 				Time:     ts,
 				TxCount:  int64(len(txns)),
@@ -142,8 +288,9 @@ func (el *EthereumListener) handleBlockResponse(response map[string]interface{})
 				}
 			}
 			timeSpan := el.blockStat[len(el.blockStat)-1].Time - el.blockStat[0].Time
+			// fmt.Println("timeSpan", timeSpan)
 			// calculate TPS and gas used percentage
-			if timeSpan > 50 {
+			if timeSpan > 10 {
 				totalTxCount := int64(0)
 				totalGasLimit := int64(0)
 				totalGasUsed := int64(0)
@@ -190,6 +337,9 @@ func (el *EthereumListener) handleBlockResponse(response map[string]interface{})
 func (el *EthereumListener) Close() {
 	if el.conn != nil {
 		el.conn.Close()
+	}
+	if el.tmConn != nil {
+		el.tmConn.Close()
 	}
 	close(el.quit)
 }

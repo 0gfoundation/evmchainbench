@@ -95,7 +95,7 @@ OO Design
 
                            +------------------+         +------------------------+
                            |                  |         |                        |
-                           |     Prepare      +-------->+  Generate transctions  |
+                           |     Prepare      +-------->+  Generate transactions |
                            |                  |         |                        |
                            +------------------+         +------------------------+
                    
@@ -109,7 +109,7 @@ OO Design
 
                            +------------------+         +------------------------+
                            |                  |         |                        |
-     a) native tx          |     Nothing      +-------->+  Generate transctions  |
+     a) native tx          |     Nothing      +-------->+  Generate transactions |
                            |                  |         |                        |
                            +------------------+         +------------------------+
                                                         |                        |
@@ -123,7 +123,7 @@ OO Design
 
                            +------------------+         +------------------------+
                            |                  |         |                        |
-     b) erc20 tx           | Deploy contract  +-------->+  Generate transctions  |
+     b) erc20 tx           | Deploy contract  +-------->+  Generate transactions |
                            |                  |         |                        |
                            +------------------+         +------------------------+
                                                         |                        |
@@ -138,7 +138,7 @@ OO Design
 
                            +------------------+         +------------------------+
                            |                  |         |                        |
-     c) incrementer tx     | Deploy contract  +-------->+  Generate transctions  |
+     c) incrementer tx     | Deploy contract  +-------->+  Generate transactions |
                            |                  |         |                        |
                            +------------------+         +------------------------+
                                                         |                        |

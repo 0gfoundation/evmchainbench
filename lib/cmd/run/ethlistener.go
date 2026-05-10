@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 
 	limiterpkg "github.com/0glabs/evmchainbench/lib/limiter"
 	"github.com/gorilla/websocket"
@@ -24,6 +25,7 @@ type EthereumListener struct {
 	limiter          *limiterpkg.RateLimiter
 	blockStat        []BlockInfo
 	quit             chan struct{}
+	closeOnce        sync.Once
 	bestTPS          int64
 	gasUsedAtBestTPS float64
 }
@@ -66,6 +68,11 @@ func (el *EthereumListener) listenForMessages() {
 	for {
 		_, message, err := el.conn.ReadMessage()
 		if err != nil {
+			// Websocket closed (either by us via Close() or because the
+			// node went away). If quit hasn't been signalled yet, do it
+			// now so the main goroutine doesn't deadlock waiting on a
+			// listener that will never produce another block.
+			el.Close()
 			return
 		}
 
@@ -188,8 +195,16 @@ func (el *EthereumListener) handleBlockResponse(response map[string]interface{})
 }
 
 func (el *EthereumListener) Close() {
-	if el.conn != nil {
-		el.conn.Close()
-	}
-	close(el.quit)
+	el.closeOnce.Do(func() {
+		if el.conn != nil {
+			el.conn.Close()
+		}
+		// Release any senders still spinning on the rate limiter — once
+		// the listener is gone, IncreaseLimit will never be called again
+		// and they would deadlock otherwise.
+		if el.limiter != nil {
+			el.limiter.Drain()
+		}
+		close(el.quit)
+	})
 }

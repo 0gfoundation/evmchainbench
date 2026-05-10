@@ -63,9 +63,12 @@ func (t *Transmitter) Broadcast(txsMap map[int]types.Transactions) error {
 							if strings.Contains(errMsg, "txpool is full") ||
 								strings.Contains(errMsg, "Too Many Requests") ||
 								strings.Contains(errMsg, "429") ||
-								strings.Contains(errMsg, "dial tcp") || 
+								strings.Contains(errMsg, "dial tcp") ||
 								strings.Contains(errMsg, "connection refused") ||
-								strings.Contains(errMsg, "EOF") {
+								strings.Contains(errMsg, "EOF") ||
+								strings.Contains(errMsg, "context deadline exceeded") ||
+								strings.Contains(errMsg, "Client.Timeout") ||
+								strings.Contains(errMsg, "i/o timeout") {
 								
 								retryCount++
 								if retryCount >= maxRetries {

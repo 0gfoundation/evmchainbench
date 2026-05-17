@@ -96,6 +96,10 @@ func (el *EthereumListener) handleNewHead(response map[string]interface{}) {
 	result := params["result"].(map[string]interface{})
 	blockNo := result["number"].(string)
 
+	// Only request the block header (with tx list) — we don't need logs.
+	// Fetching eth_getLogs for every new head stalls the WS connection on
+	// large-block chains (e.g. ~45k tx/block on 0g GCP testnet drops the
+	// connection mid-bench, causing TPS readings to stop updating).
 	request := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -105,22 +109,6 @@ func (el *EthereumListener) handleNewHead(response map[string]interface{}) {
 	err := el.conn.WriteJSON(request)
 	if err != nil {
 		log.Println("Failed to send block request:", err)
-	}
-
-	request = map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "eth_getLogs",
-		"params": []interface{}{
-			map[string]interface{}{
-				"fromBlock": blockNo,
-				"toBlock":   blockNo,
-			},
-		},
-	}
-	err = el.conn.WriteJSON(request)
-	if err != nil {
-		log.Println("Failed to send log request:", err)
 	}
 }
 
@@ -183,12 +171,6 @@ func (el *EthereumListener) handleBlockResponse(response map[string]interface{})
 					fmt.Printf("Best TPS: %d GasUsed%%: %.2f%%\n", el.bestTPS, el.gasUsedAtBestTPS*100)
 					el.Close()
 				}
-			}
-		}
-	} else {
-		if result, ok := response["result"].([]interface{}); ok {
-			if len(result) > 0 {
-				fmt.Println("Logs:", len(result))
 			}
 		}
 	}

@@ -58,8 +58,16 @@ func (t *Transmitter) Broadcast(txsMap map[int]types.Transactions) error {
 					if t.limiter == nil || t.limiter.AllowRequest() {
 						err := broadcast(t.client, tx)
 						if err != nil {
-							// Check for transient errors to retry
 							errMsg := err.Error()
+
+							// Nonce too low or already known: tx was already included
+							// on-chain or replaced, safe to skip and move on
+							if strings.Contains(errMsg, "nonce too low") ||
+								strings.Contains(errMsg, "already known") {
+								break
+							}
+
+							// Check for transient errors to retry
 							if strings.Contains(errMsg, "txpool is full") ||
 								strings.Contains(errMsg, "Too Many Requests") ||
 								strings.Contains(errMsg, "429") ||

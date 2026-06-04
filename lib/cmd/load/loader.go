@@ -2,7 +2,6 @@ package load
 
 import (
 	"context"
-	"time"
 
 	"github.com/0glabs/evmchainbench/lib/cmd/run"
 	"github.com/0glabs/evmchainbench/lib/store"
@@ -41,7 +40,7 @@ func (l *Loader) LoadAndRun() error {
 		}
 	}
 
-	err = util.WaitForReceiptsOfTxs(client, txs, 20*time.Second)
+	err = util.WaitForReceiptsOfTxs(client, txs, util.ReceiptWaitTimeout())
 	if err != nil {
 		return err
 	}
